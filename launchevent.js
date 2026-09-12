@@ -106,10 +106,12 @@ function onMessageSendHandler(event) {
                     recipientDomains.add(domain);
 
                     const brand = getBrandFromDomain(domain);
+                    console.log(`[SmartAlert] 🏢 brand : `, brand);
                     
                     // Alıcının marka adı tanımlı listede varsa kaydet
                     if (clientBrands.includes(brand)) {
                         detectedClientBrands.add(brand);
+                        console.log(`[SmartAlert] 🏢 detectedClientBrands : `, brand);
                     }
                 }
             }
