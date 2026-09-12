@@ -1,130 +1,123 @@
 /* global Office */
 
-console.log("[SmartAlert] Script yüklendi ve çalışma ortamı hazır.");
+console.log("[SmartAlert] Hızlı Tarama Modu Yüklendi.");
 
-Office.onReady((info) => {
-    console.log("[SmartAlert] Office.onReady tetiklendi. Host:", info.host, "Platform:", info.platform);
-});
+Office.onReady();
 
 function onMessageSendHandler(event) {
-    console.log("[SmartAlert] === OnMessageSendHandler Tetiklendi ===");
+    const startTime = performance.now();
+    console.log("[SmartAlert] 🚀 Gönderim kontrolü başlatıldı.");
     let isCompleted = false;
 
-    // 3.5 saniyelik güvenlik zaman aşımı
+    // 2.5 saniyelik sıkı güvenlik zaman aşımı (Mail kilitlenmesini tamamen önler)
     const safetyTimeout = setTimeout(() => {
         if (!isCompleted) {
-            console.warn("[SmartAlert] ⚠️ ZAMAN AŞIMI: 3.5s içinde yanıt alınamadı. Mail gönderimine otomatik izin veriliyor.");
+            console.warn("[SmartAlert] ⚠️ ZAMAN AŞIMI: Güvenlik sınırı aşıldı, gönderime izin veriliyor.");
             isCompleted = true;
             event.completed({ allowEvent: true });
         }
-    }, 3500);
+    }, 2500);
 
     function safeComplete(args, reason) {
-        console.log(`[SmartAlert] safeComplete çağrıldı. Nedeni: [${reason}] | Tamamlanma Durumu: ${isCompleted}`);
         if (!isCompleted) {
             isCompleted = true;
             clearTimeout(safetyTimeout);
-            console.log("[SmartAlert] event.completed() çalıştırılıyor. Gönderilen parametreler:", JSON.stringify(args));
+            const duration = (performance.now() - startTime).toFixed(2);
+            console.log(`[SmartAlert] ⏱️ İşlem Tamamlandı (${duration} ms). Sonuç: [${reason}]`);
+            console.log("[SmartAlert] Yanıt:", JSON.stringify(args));
             event.completed(args);
-        } else {
-            console.warn("[SmartAlert] ⚠️ DİKKAT: event.completed() zaten çağrılmıştı, mükerrer çağrı engellendi.");
         }
     }
 
     try {
         const mailbox = Office.context.mailbox;
-        console.log("[SmartAlert] Mailbox nesnesi:", mailbox ? "Mevcut" : "NULL/Undefined");
-
-        const userEmail = mailbox && mailbox.userProfile ? mailbox.userProfile.emailAddress : "";
-        console.log("[SmartAlert] Gönderen e-posta adresi:", userEmail || "Bulunamadı");
-
+        const userEmail = (mailbox && mailbox.userProfile) ? mailbox.userProfile.emailAddress : "";
         const senderDomain = getDomain(userEmail);
-        console.log("[SmartAlert] Tespit edilen gönderen domaini:", senderDomain || "Bulunamadı");
+
+        console.log(`[SmartAlert] Gönderen: ${userEmail} | Domain: ${senderDomain}`);
 
         if (!senderDomain) {
-            console.warn("[SmartAlert] Gönderen domaini okunamadığı için kontrol atlanıyor.");
+            console.warn("[SmartAlert] Gönderen domaini okunamadı, kontrol atlanıyor.");
             safeComplete({ allowEvent: true }, "Gönderen domain yok");
             return;
         }
 
         const item = mailbox.item;
-        console.log("[SmartAlert] Alıcı adresleri (To, CC, BCC) çekiliyor...");
 
+        // TO, CC, BCC alanlarını eşzamanlı (paralel) en hızlı şekilde oku
         Promise.all([
-            getRecipients(item.to, "To"),
-            getRecipients(item.cc, "Cc"),
-            getRecipients(item.bcc, "Bcc")
+            getRecipientsFast(item.to, "To"),
+            getRecipientsFast(item.cc, "Cc"),
+            getRecipientsFast(item.bcc, "Bcc")
         ]).then((results) => {
-            const allRecipients = results.flat();
-            console.log("[SmartAlert] Çekilen tüm alıcı listesi:", allRecipients);
+            const externalRecipients = new Set();
 
-            const externalRecipients = [];
-            for (const email of allRecipients) {
-                const domain = getDomain(email);
-                console.log(`[SmartAlert] Alıcı Analizi -> E-posta: ${email} | Domain: ${domain}`);
-                if (domain && domain !== senderDomain) {
-                    externalRecipients.push(email);
+            // Performans için tek geçişli düz döngü
+            for (let i = 0; i < results.length; i++) {
+                const list = results[i];
+                for (let j = 0; j < list.length; j++) {
+                    const email = list[j];
+                    const domain = getDomain(email);
+                    if (domain && domain !== senderDomain) {
+                        externalRecipients.add(email);
+                    }
                 }
             }
 
-            console.log("[SmartAlert] Harici (dış) alıcılar:", externalRecipients);
+            if (externalRecipients.size > 0) {
+                const blockedList = Array.from(externalRecipients).join(", ");
+                console.log(`[SmartAlert] 🛑 ENGELLEME: Harici alıcılar tespit edildi -> [${blockedList}]`);
 
-            if (externalRecipients.length > 0) {
-                const uniqueList = [...new Set(externalRecipients)].join(", ");
-                
-                // Enum ve nesne kontrolleri için loglar
-                console.log("[SmartAlert] Office.MailboxEnums nesnesi:", Office.MailboxEnums);
-                let blockMode = 1; // Fallback SendModePrompt.Block değeri
-
-                if (Office.MailboxEnums && Office.MailboxEnums.SendModePrompt) {
-                    console.log("[SmartAlert] Office.MailboxEnums.SendModePrompt nesnesi mevcut:", Office.MailboxEnums.SendModePrompt);
-                    blockMode = Office.MailboxEnums.SendModePrompt.Block;
-                } else {
-                    console.warn("[SmartAlert] ⚠️ Office.MailboxEnums.SendModePrompt bulunamadı! Yedek değer (1) kullanılıyor.");
-                }
-
-                console.log(`[SmartAlert] 🛑 ENGELLEME KARARI VERİLDİ. Kullanılan blockMode: ${blockMode}`);
                 safeComplete({
                     allowEvent: false,
-                    errorMessage: `GÜVENLİK UYARISI: Şirket dışı alıcı tespit edildi: [${uniqueList}]. Yalnızca @${senderDomain} adreslerine gönderim yapabilirsiniz.`,
-                    sendModePrompt: blockMode
-                }, "Harici alıcı tespit edildi");
+                    errorMessage: `GÜVENLİK UYARISI: Şirket dışı alıcı tespit edildi: [${blockedList}]. Yalnızca @${senderDomain} adreslerine gönderim yapabilirsiniz.`
+                }, "Harici alıcı engellendi");
             } else {
-                console.log("[SmartAlert] ✅ TÜM ALICILAR İÇ DOMAİN. Gönderime izin veriliyor.");
+                console.log("[SmartAlert] ✅ BAŞARILI: Tüm alıcılar kurum içi.");
                 safeComplete({ allowEvent: true }, "Tüm alıcılar iç domain");
             }
         }).catch((err) => {
-            console.error("[SmartAlert] ❌ Promise.all aşamasında hata yakalandı:", err);
-            safeComplete({ allowEvent: true }, "Promise.all hatası");
+            console.error("[SmartAlert] ❌ Alıcı okuma hatası:", err);
+            safeComplete({ allowEvent: true }, "Okuma hatası");
         });
 
     } catch (err) {
-        console.error("[SmartAlert] ❌ Ana try-catch bloğunda kritik hata:", err);
-        safeComplete({ allowEvent: true }, "Ana try-catch hatası");
+        console.error("[SmartAlert] ❌ Kritik işlem hatası:", err);
+        safeComplete({ allowEvent: true }, "Kritik hata");
     }
 }
 
+// Hızlı Domain Ayıklama
 function getDomain(email) {
-    if (!email || typeof email !== "string" || !email.includes("@")) return "";
-    return email.split("@").pop().toLowerCase().trim();
+    if (!email || typeof email !== "string") return "";
+    const atIndex = email.lastIndexOf("@");
+    return atIndex !== -1 ? email.substring(atIndex + 1).toLowerCase().trim() : "";
 }
 
-function getRecipients(field, fieldName) {
+// Ultra Hızlı Asenkron Alıcı Okuyucu
+function getRecipientsFast(field, fieldName) {
     return new Promise((resolve) => {
         if (!field || typeof field.getAsync !== "function") {
-            console.log(`[SmartAlert] Alıcı alanı [${fieldName}] boş veya getAsync desteklemiyor.`);
             resolve([]);
             return;
         }
-        console.log(`[SmartAlert] [${fieldName}] alanı için getAsync çağrılıyor...`);
         field.getAsync((result) => {
-            console.log(`[SmartAlert] [${fieldName}] getAsync yanıtı alındı. Durum: ${result ? result.status : "null"}`);
             if (result && result.status === Office.AsyncResultStatus.Succeeded && Array.isArray(result.value)) {
-                const emails = result.value.map(r => r.emailAddress || r.address || "").filter(Boolean);
-                console.log(`[SmartAlert] [${fieldName}] alanından ayıklanan e-postalar:`, emails);
+                const len = result.value.length;
+                const emails = new Array(len);
+                let validCount = 0;
+
+                for (let i = 0; i < len; i++) {
+                    const item = result.value[i];
+                    const addr = (typeof item === "string") ? item : (item.emailAddress || item.address || "");
+                    if (addr) {
+                        emails[validCount++] = addr;
+                    }
+                }
+                emails.length = validCount; // Diziyi gerçek eleman sayısına kırp
+                console.log(`[SmartAlert] [${fieldName}] okundu: ${validCount} adres`);
                 resolve(emails);
             } else {
-                console.warn(`[SmartAlert] [${fieldName}] alanı okunamadı veya boş:`, result ? result.error : "Sonuç yok");
                 resolve([]);
             }
         });
