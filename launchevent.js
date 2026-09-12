@@ -5,8 +5,8 @@
  * OUTLOOK SMART ALERT - DOKÜMAN VE FİRMA KONTROL EKLENTİSİ
  * ============================================================================
  * Kurallar:
- * 1. Shared (ortak) mail adresleri SADECE kendisiyle eşleşen firmaya (veya @fmtturkey.com içine) mail atabilir.
- * 2. Şahsi veya Shared hesaplardan atılan mailde (To, CC, BCC) aynı anda 2 FARKLI müşteri firması bulunamaz.
+ * 1. Şahsi veya Shared hesaplardan atılan mailde (To, CC, BCC) aynı anda 2 FARKLI müşteri firması bulunamaz.
+ * 2. Domain uzantıları (.com, .com.tr vb.) bağımsız marka köküne göre kontrol yapılır.
  * ============================================================================
  */
 
@@ -16,15 +16,13 @@ Office.onReady();
 
 // ============================================================================
 // ⚙️ CONFIGURATION / YAPILANDIRMA ALANI
-// İleride yeni bir müşteri firması veya Shared Mailbox geldiğinde SADECE
-// aşağıdaki listelere ekleme yapmanız yeterlidir.
 // ============================================================================
 
 // 1. Kurum İçi Domain
 const INTERNAL_DOMAIN = "fmtturkey.com";
 
-// 2. Tanımlı Müşteri / Partner Firma Domain Listesi
-// İleride yeni firma geldikçe bu diziye yeni domain ekleyin.
+// 2. Tanımlı Müşteri / Partner Firma Listesi
+// Uzantı yazsanız bile (.com / .com.tr) sistem otomatik olarak marka kökünü ("akcansa", "onduline") alır.
 const CLIENT_DOMAINS = [
     "akcansa.com.tr",
     "cci.com.tr",
@@ -33,19 +31,6 @@ const CLIENT_DOMAINS = [
     "allianz.com.tr",
     "roche.com"
 ];
-
-// 3. Shared Mailbox -> Müşteri Domain Eşleşme Haritası
-// Hangi shared mailin SADECE hangi dış domain'e mail atabileceğini belirtir.
-const SHARED_MAILBOX_MAP = {
-    "abdiibrahimfilo@fmtturkey.com": "abdiibrahim.com.tr",
-    "akcansafilo@fmtturkey.com": "akcansa.com.tr",
-    "allianzfilo@fmtturkey.com": "allianz.com.tr",
-    "ccifilo@fmtturkey.com": "cci.com.tr",
-    "cciexpat@fmtturkey.com": "cci.com.tr",
-    "ondulinefilos@fmtturkey.com": "onduline.com.tr",
-    "rocheexpat@fmtturkey.com": "roche.com",
-    "rochefilo@fmtturkey.com": "roche.com"
-};
 
 // ============================================================================
 // 🚀 ANA TETİKLEYİCİ FONKSİYON (OnMessageSend)
@@ -56,7 +41,7 @@ function onMessageSendHandler(event) {
     console.log("[SmartAlert] 🚀 Gönderim kontrolü başlatıldı.");
     let isCompleted = false;
 
-    // 3.0 saniyelik güvenlik zaman aşımı (Mail kilitlenmesini kesin önler)
+    // 3.0 saniyelik güvenlik zaman aşımı
     const safetyTimeout = setTimeout(() => {
         if (!isCompleted) {
             console.warn("[SmartAlert] ⚠️ ZAMAN AŞIMI: 3.0s içinde yanıt alınamadı. Güvenlik nedeniyle gönderime izin veriliyor.");
@@ -106,9 +91,12 @@ function onMessageSendHandler(event) {
                 return;
             }
 
-            // --- ADIM 3: ALICI DOMAINLERINI VE FİRMALARINI ANALİZ ET ---
+            // --- ADIM 3: ALICI DOMAINLERINI VE MARKA KÖKLERİNİ ANALİZ ET ---
+            // Tanımlı müşteri domainlerinin uzantısız marka isimlerini çıkar ("onduline.com.tr" -> "onduline")
+            const clientBrands = CLIENT_DOMAINS.map(d => getBrandFromDomain(d));
+
             const recipientDomains = new Set();
-            const detectedClientDomains = new Set();
+            const detectedClientBrands = new Set();
 
             for (let i = 0; i < allRecipients.length; i++) {
                 const email = allRecipients[i];
@@ -117,21 +105,22 @@ function onMessageSendHandler(event) {
                 if (domain) {
                     recipientDomains.add(domain);
 
-                    // Eğer alıcı domaini tanımlı Müşteri Domain listesindeyse kaydet
-                    if (CLIENT_DOMAINS.includes(domain)) {
-                        detectedClientDomains.add(domain);
+                    const brand = getBrandFromDomain(domain);
+                    
+                    // Alıcının marka adı tanımlı listede varsa kaydet
+                    if (clientBrands.includes(brand)) {
+                        detectedClientBrands.add(brand);
                     }
                 }
             }
 
             console.log(`[SmartAlert] 🔍 Tespit Edilen Tüm Alıcı Domainleri:`, Array.from(recipientDomains));
-            console.log(`[SmartAlert] 🏢 Tespit Edilen Müşteri Firmaları:`, Array.from(detectedClientDomains));
+            console.log(`[SmartAlert] 🏢 Tespit Edilen Müşteri Markaları:`, Array.from(detectedClientBrands));
 
             // --- KONTROL 1: ÇAPRAZ FİRMA KONTROLÜ (ÇOKLU FİRMA ENGELİ) ---
-            // Şahsi veya Shared fark etmeksizin, aynı mailde birden fazla FARKLI müşteri firması olamaz!
-            if (detectedClientDomains.size > 1) {
-                const clientList = Array.from(detectedClientDomains).join(", ");
-                console.log(`[SmartAlert] 🛑 ENGELLEME (Çoklu Firma Çakışması): Mailde ${detectedClientDomains.size} farklı firma tespit edildi -> [${clientList}]`);
+            if (detectedClientBrands.size > 1) {
+                const clientList = Array.from(detectedClientBrands).map(b => b.toUpperCase()).join(", ");
+                console.log(`[SmartAlert] 🛑 ENGELLEME (Çoklu Firma Çakışması): Mailde ${detectedClientBrands.size} farklı firma tespit edildi -> [${clientList}]`);
 
                 safeComplete({
                     allowEvent: false,
@@ -159,9 +148,6 @@ function onMessageSendHandler(event) {
 // 🛠️ YARDIMCI FONKSİYONLAR (HELPERS)
 // ============================================================================
 
-/**
- * Gönderen e-posta adresini güvenli ve yedekli şekilde çeker.
- */
 function getSenderEmail() {
     const mailbox = Office.context.mailbox;
     if (mailbox && mailbox.userProfile && mailbox.userProfile.emailAddress) {
@@ -173,9 +159,6 @@ function getSenderEmail() {
     return "";
 }
 
-/**
- * E-posta adresinden domain kısmını çıkarır (örn: "test@akcansa.com.tr" -> "akcansa.com.tr")
- */
 function getDomain(email) {
     if (!email || typeof email !== "string") return "";
     const atIndex = email.lastIndexOf("@");
@@ -183,8 +166,15 @@ function getDomain(email) {
 }
 
 /**
- * To, CC, BCC alanlarındaki e-posta adreslerini hızlı ve asenkron olarak çeker.
+ * Domain adının uzantısını temizleyerek ilk marka parçasını döndürür.
+ * Örn: "onduline.com" -> "onduline"
+ * Örn: "onduline.com.tr" -> "onduline"
  */
+function getBrandFromDomain(domain) {
+    if (!domain || typeof domain !== "string") return "";
+    return domain.split(".")[0].toLowerCase().trim();
+}
+
 function getRecipientsFast(field, fieldName) {
     return new Promise((resolve) => {
         if (!field || typeof field.getAsync !== "function") {
