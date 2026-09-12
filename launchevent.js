@@ -1,123 +1,87 @@
 /* global Office */
 
-/**
- * Office.js kütüphanesi hazır olduğunda tetiklenir
- */
-Office.onReady(() => {
-    // Office ortamı hazır
-});
+Office.onReady();
 
-/**
- * E-posta Gönder butonuna basıldığında tetiklenen OnMessageSend olay işleyicisi
- * @param {Office.AddinCommands.Event} event - Office eklenti olayı
- */
 function onMessageSendHandler(event) {
+    let isCompleted = false;
+
+    // 3.5 saniye içinde işlem bitmezse mailin kilitlenmesini önlemek için otomatik tamamla
+    const safetyTimeout = setTimeout(() => {
+        if (!isCompleted) {
+            isCompleted = true;
+            event.completed({ allowEvent: true });
+        }
+    }, 3500);
+
+    function safeComplete(args) {
+        if (!isCompleted) {
+            isCompleted = true;
+            clearTimeout(safetyTimeout);
+            event.completed(args);
+        }
+    }
+
     try {
         const mailbox = Office.context.mailbox;
-        
-        // 1. Gönderen kullanıcının e-posta adresi ve domain bilgisi
         const userEmail = mailbox.userProfile ? mailbox.userProfile.emailAddress : "";
-        const senderDomain = getDomainFromEmail(userEmail);
+        const senderDomain = getDomain(userEmail);
 
         if (!senderDomain) {
-            // Gönderen domaini okunamadıysa güvenlik nedeniyle engelle
-            event.completed({
-                allowEvent: false,
-                errorMessage: "Gönderen e-posta adresi doğrulanamadı. Lütfen oturumunuzu kontrol edin.",
-                sendModePrompt: Office.MailboxEnums.SendModePrompt.Block
-            });
+            safeComplete({ allowEvent: true });
             return;
         }
 
         const item = mailbox.item;
 
-        // 2. TO, CC ve BCC alıcı listelerini eşzamanlı olarak al
         Promise.all([
-            getRecipientsAsync(item.to),
-            getRecipientsAsync(item.cc),
-            getRecipientsAsync(item.bcc)
-        ]).then(([toRecipients, ccRecipients, bccRecipients]) => {
-            const allRecipients = [...toRecipients, ...ccRecipients, ...bccRecipients];
-
-            if (allRecipients.length === 0) {
-                // Alıcı yoksa gönderime izin ver (Outlook zaten uyaracaktır)
-                event.completed({ allowEvent: true });
-                return;
-            }
-
-            // 3. Gönderen domaininden farklı olan alıcıları filtrele
+            getRecipients(item.to),
+            getRecipients(item.cc),
+            getRecipients(item.bcc)
+        ]).then((results) => {
+            const allRecipients = results.flat();
             const externalRecipients = [];
 
-            for (const recipient of allRecipients) {
-                const email = recipient.emailAddress || recipient.address || "";
-                const recipientDomain = getDomainFromEmail(email);
-
-                if (recipientDomain && recipientDomain !== senderDomain) {
+            for (const email of allRecipients) {
+                const domain = getDomain(email);
+                if (domain && domain !== senderDomain) {
                     externalRecipients.push(email);
                 }
             }
 
-            // 4. Farklı domain alıcısı bulunduysa gönderimi engelle
             if (externalRecipients.length > 0) {
-                const uniqueExternal = [...new Set(externalRecipients)];
-                const recipientListStr = uniqueExternal.join(", ");
-
-                event.completed({
+                const uniqueList = [...new Set(externalRecipients)].join(", ");
+                safeComplete({
                     allowEvent: false,
-                    errorMessage: `GÜVENLİK UYARISI: Şirket dışı alıcı tespit edildi: [${recipientListStr}]. Yalnızca @${senderDomain} uzantılı adreslere mail gönderebilirsiniz.`,
+                    errorMessage: `GÜVENLİK UYARISI: Şirket dışı alıcı tespit edildi: [${uniqueList}]. Yalnızca @${senderDomain} adreslerine gönderim yapabilirsiniz.`,
                     sendModePrompt: Office.MailboxEnums.SendModePrompt.Block
                 });
             } else {
-                // Tüm alıcılar şirket içi domain ile eşleşiyor
-                event.completed({ allowEvent: true });
+                safeComplete({ allowEvent: true });
             }
-        }).catch((error) => {
-            // Beklenmeyen bir hata durumunda güvenli tarafta kalıp gönderimi engelle
-            console.error("Alıcı kontrol hatası:", error);
-            event.completed({
-                allowEvent: false,
-                errorMessage: "Alıcı adresleri doğrulanırken bir sistem hatası oluştu. Mail gönderilemedi.",
-                sendModePrompt: Office.MailboxEnums.SendModePrompt.Block
-            });
+        }).catch(() => {
+            safeComplete({ allowEvent: true });
         });
 
     } catch (err) {
-        console.error("onMessageSendHandler çalışma hatası:", err);
-        event.completed({
-            allowEvent: false,
-            errorMessage: "Eklenti çalışırken bir hata oluştu.",
-            sendModePrompt: Office.MailboxEnums.SendModePrompt.Block
-        });
+        safeComplete({ allowEvent: true });
     }
 }
 
-/**
- * E-posta adresinden domain bilgisini ayıklar
- * @param {string} email 
- * @returns {string} Domain adı (küçük harflerle)
- */
-function getDomainFromEmail(email) {
-    if (!email || typeof email !== "string" || !email.includes("@")) {
-        return "";
-    }
-    const parts = email.split("@");
-    return parts[parts.length - 1].toLowerCase().trim();
+function getDomain(email) {
+    if (!email || typeof email !== "string" || !email.includes("@")) return "";
+    return email.split("@").pop().toLowerCase().trim();
 }
 
-/**
- * Outlook alıcı alanındaki (TO/CC/BCC) kişileri asenkron olarak çeker
- * @param {Office.Recipients} recipientField 
- * @returns {Promise<Array>} Alıcı nesneleri dizisi
- */
-function getRecipientsAsync(recipientField) {
+function getRecipients(field) {
     return new Promise((resolve) => {
-        if (!recipientField || typeof recipientField.getAsync !== "function") {
+        if (!field || typeof field.getAsync !== "function") {
             resolve([]);
             return;
         }
-        recipientField.getAsync((result) => {
-            if (result.status === Office.AsyncResultStatus.Succeeded && result.value) {
-                resolve(result.value);
+        field.getAsync((result) => {
+            if (result && result.status === Office.AsyncResultStatus.Succeeded && Array.isArray(result.value)) {
+                const emails = result.value.map(r => r.emailAddress || r.address || "").filter(Boolean);
+                resolve(emails);
             } else {
                 resolve([]);
             }
@@ -125,7 +89,4 @@ function getRecipientsAsync(recipientField) {
     });
 }
 
-// Fonksiyonu Office Add-in olay eşlemesine kaydet
-if (typeof Office !== "undefined" && Office.actions) {
-    Office.actions.associate("onMessageSendHandler", onMessageSendHandler);
-}
+Office.actions.associate("onMessageSendHandler", onMessageSendHandler);
