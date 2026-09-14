@@ -26,12 +26,12 @@ const INTERNAL_DOMAIN = "fmtturkey.com";
 const SENDER_BRAND_MAP = {
     "abdiibrahimfilo@fmtturkey.com": "abdiibrahim",
     "ccifilo@fmtturkey.com": "cci",
-	"cciexpat@fmtturkey.com": "cci",
+    "cciexpat@fmtturkey.com": "cci",
     "akcansafilo@fmtturkey.com": "akcansa",
     "ondulinefilo@fmtturkey.com": "onduline",
     "allianzfilo@fmtturkey.com": "allianz",
-    "rochefilo@fmtturkey.com": "roche"
-	"rocheexpat@fmtturkey.com": "roche"
+    "rochefilo@fmtturkey.com": "roche",
+    "rocheexpat@fmtturkey.com": "roche"
 };
 
 // 3. Tanımlı Müşteri / Partner Firma Domain Listesi
@@ -53,14 +53,14 @@ function onMessageSendHandler(event) {
     console.log("[SmartAlert] 🚀 Gönderim kontrolü başlatıldı.");
     let isCompleted = false;
 
-    // 3.0 saniyelik güvenlik zaman aşımı
+    // 2.0 saniyelik genel güvenlik zaman aşımı
     const safetyTimeout = setTimeout(() => {
         if (!isCompleted) {
-            console.warn("[SmartAlert] ⚠️ ZAMAN AŞIMI: 3.0s içinde yanıt alınamadı. Güvenlik nedeniyle gönderime izin veriliyor.");
+            console.warn("[SmartAlert] ⚠️ ZAMAN AŞIMI: 2.0s içinde yanıt alınamadı. Güvenlik nedeniyle gönderime izin veriliyor.");
             isCompleted = true;
             event.completed({ allowEvent: true });
         }
-    }, 3000);
+    }, 2000);
 
     function safeComplete(args, reason) {
         if (!isCompleted) {
@@ -76,7 +76,7 @@ function onMessageSendHandler(event) {
     try {
         const item = Office.context.mailbox.item;
 
-        // --- GÖNDEREN VE ALICILARI PARALEL OLARAK ÇEK ---
+        // --- GÖNDEREN VE ALICILARI PARALEL OLARAK HIZLI ÇEK ---
         Promise.all([
             getSenderEmailAsync(item),
             getRecipientsFast(item.to, "To"),
@@ -103,7 +103,6 @@ function onMessageSendHandler(event) {
             }
 
             // --- ADIM 1: ALICI DOMAINLERINI VE MARKA KÖKLERİNİ ANALİZ ET ---
-			// Tanımlı müşteri domainlerinin uzantısız marka isimlerini çıkar ("onduline.com.tr" -> "onduline")
             const clientBrands = CLIENT_DOMAINS.map(d => getBrandFromDomain(d));
             const recipientDomains = new Set();
             const detectedRecipientBrands = new Set();
@@ -115,13 +114,11 @@ function onMessageSendHandler(event) {
                 if (domain) {
                     recipientDomains.add(domain);
                     const brand = getBrandFromDomain(domain);
-					console.log(`[SmartAlert] 🏢 brand : `, brand);
-                    
-                    // Alıcının marka adı tanımlı listede varsa kaydet
+                    console.log(`[SmartAlert] 🏢 brand : `, brand);
+
                     if (clientBrands.includes(brand)) {
                         detectedRecipientBrands.add(brand);
-						console.log(`[SmartAlert] 🏢 detectedRecipientBrands : `, brand);
-                    
+                        console.log(`[SmartAlert] 🏢 detectedRecipientBrands : `, brand);
                     }
                 }
             }
@@ -178,27 +175,42 @@ function onMessageSendHandler(event) {
 }
 
 // ============================================================================
-// 🛠️ YARDIMCI FONKSİYONLAR (HELPERS)
+// 🛠️ HIZLANDIRILMIŞ YARDIMCI FONKSİYONLAR (HELPERS)
 // ============================================================================
 
 /**
- * Paylaşılan kutu (Shared Mailbox) ve "Kimden" alanı değişikliklerini 
- * doğru şekilde yakalayan asenkron gönderen adresi okuyucu.
+ * Gönderen adresini 800ms mikro-zaman aşımı ile okur.
  */
 function getSenderEmailAsync(item) {
     return new Promise((resolve) => {
+        let isResolved = false;
+
+        const timer = setTimeout(() => {
+            if (!isResolved) {
+                isResolved = true;
+                console.warn("[SmartAlert] ⚠️ item.from.getAsync 800ms içinde yanıt vermedi, varsayılan adres kullanılıyor.");
+                resolve(getFallbackUserEmail());
+            }
+        }, 800);
+
         if (item && item.from && typeof item.from.getAsync === "function") {
             item.from.getAsync((result) => {
-                if (result && result.status === Office.AsyncResultStatus.Succeeded && result.value) {
-                    const addr = result.value.emailAddress || result.value.address || "";
-                    if (addr) {
-                        resolve(addr.toLowerCase().trim());
-                        return;
+                if (!isResolved) {
+                    isResolved = true;
+                    clearTimeout(timer);
+                    if (result && result.status === Office.AsyncResultStatus.Succeeded && result.value) {
+                        const addr = result.value.emailAddress || result.value.address || "";
+                        if (addr) {
+                            resolve(addr.toLowerCase().trim());
+                            return;
+                        }
                     }
+                    resolve(getFallbackUserEmail());
                 }
-                resolve(getFallbackUserEmail());
             });
         } else {
+            isResolved = true;
+            clearTimeout(timer);
             resolve(getFallbackUserEmail());
         }
     });
@@ -226,28 +238,46 @@ function getBrandFromDomain(domain) {
     return domain.split(".")[0].toLowerCase().trim();
 }
 
+/**
+ * Alıcı alanlarını 800ms mikro-zaman aşımı ile okur.
+ */
 function getRecipientsFast(field, fieldName) {
     return new Promise((resolve) => {
         if (!field || typeof field.getAsync !== "function") {
             resolve([]);
             return;
         }
-        field.getAsync((result) => {
-            if (result && result.status === Office.AsyncResultStatus.Succeeded && Array.isArray(result.value)) {
-                const len = result.value.length;
-                const emails = [];
 
-                for (let i = 0; i < len; i++) {
-                    const item = result.value[i];
-                    const addr = (typeof item === "string") ? item : (item.emailAddress || item.address || "");
-                    if (addr) {
-                        emails.push(addr.toLowerCase().trim());
-                    }
-                }
-                console.log(`[SmartAlert] 📥 [${fieldName}] alanından ${emails.length} adres okundu.`);
-                resolve(emails);
-            } else {
+        let isResolved = false;
+
+        const timer = setTimeout(() => {
+            if (!isResolved) {
+                isResolved = true;
+                console.warn(`[SmartAlert] ⚠️ [${fieldName}] okuması 800ms zaman aşımına uğradı.`);
                 resolve([]);
+            }
+        }, 800);
+
+        field.getAsync((result) => {
+            if (!isResolved) {
+                isResolved = true;
+                clearTimeout(timer);
+                if (result && result.status === Office.AsyncResultStatus.Succeeded && Array.isArray(result.value)) {
+                    const len = result.value.length;
+                    const emails = [];
+
+                    for (let i = 0; i < len; i++) {
+                        const item = result.value[i];
+                        const addr = (typeof item === "string") ? item : (item.emailAddress || item.address || "");
+                        if (addr) {
+                            emails.push(addr.toLowerCase().trim());
+                        }
+                    }
+                    console.log(`[SmartAlert] 📥 [${fieldName}] alanından ${emails.length} adres okundu.`);
+                    resolve(emails);
+                } else {
+                    resolve([]);
+                }
             }
         });
     });
