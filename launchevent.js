@@ -23,7 +23,6 @@ Office.onReady();
 const INTERNAL_DOMAIN = "fmtturkey.com";
 
 // 2. Sabit Gönderen E-Posta -> Müşteri Markası Eşleşme Haritası
-// Yeni e-posta adreslerinizi ve bağlı oldukları markayı bu objeye ekleyebilirsiniz.
 const SENDER_BRAND_MAP = {
     "abdiibrahimfilo@fmtturkey.com": "abdiibrahim",
     "ccifilo@fmtturkey.com": "cci",
@@ -34,7 +33,6 @@ const SENDER_BRAND_MAP = {
 };
 
 // 3. Tanımlı Müşteri / Partner Firma Domain Listesi
-// Uzantı yazsanız bile (.com / .com.tr) sistem otomatik olarak marka kökünü ("akcansa", "onduline") alır.
 const CLIENT_DOMAINS = [
     "akcansa.com.tr",
     "cci.com.tr",
@@ -74,27 +72,26 @@ function onMessageSendHandler(event) {
     }
 
     try {
-        // --- ADIM 1: GÖNDEREN E-POSTA VE DOMAIN TESPİTİ ---
-        const userEmail = getSenderEmail();
-        const senderDomain = getDomain(userEmail);
-
-        console.log(`[SmartAlert] 👤 Gönderen Mail: [${userEmail}] | Domain: [${senderDomain}]`);
-
-        if (!userEmail) {
-            console.warn("[SmartAlert] Gönderen mail adresi tespit edilemedi, kontrol atlanıyor.");
-            safeComplete({ allowEvent: true }, "Gönderen adresi yok");
-            return;
-        }
-
         const item = Office.context.mailbox.item;
 
-        // --- ADIM 2: ALICILARI (TO, CC, BCC) PARALEL OLARAK ÇEK ---
+        // --- GÖNDEREN VE ALICILARI PARALEL OLARAK ÇEK ---
         Promise.all([
+            getSenderEmailAsync(item),
             getRecipientsFast(item.to, "To"),
             getRecipientsFast(item.cc, "Cc"),
             getRecipientsFast(item.bcc, "Bcc")
-        ]).then((results) => {
-            const allRecipients = results.flat();
+        ]).then(([userEmail, toRecipients, ccRecipients, bccRecipients]) => {
+            const senderDomain = getDomain(userEmail);
+
+            console.log(`[SmartAlert] 👤 Gönderen Mail: [${userEmail}] | Domain: [${senderDomain}]`);
+
+            if (!userEmail) {
+                console.warn("[SmartAlert] Gönderen mail adresi tespit edilemedi, kontrol atlanıyor.");
+                safeComplete({ allowEvent: true }, "Gönderen adresi yok");
+                return;
+            }
+
+            const allRecipients = [...toRecipients, ...ccRecipients, ...bccRecipients];
             console.log(`[SmartAlert] 📩 Toplam ${allRecipients.length} alıcı tespit edildi:`, allRecipients);
 
             if (allRecipients.length === 0) {
@@ -103,8 +100,8 @@ function onMessageSendHandler(event) {
                 return;
             }
 
-            // --- ADIM 3: ALICI DOMAINLERINI VE MARKA KÖKLERİNİ ANALİZ ET ---
-            // Tanımlı müşteri domainlerinin uzantısız marka isimlerini çıkar ("onduline.com.tr" -> "onduline")
+            // --- ADIM 1: ALICI DOMAINLERINI VE MARKA KÖKLERİNİ ANALİZ ET ---
+			// Tanımlı müşteri domainlerinin uzantısız marka isimlerini çıkar ("onduline.com.tr" -> "onduline")
             const clientBrands = CLIENT_DOMAINS.map(d => getBrandFromDomain(d));
             const recipientDomains = new Set();
             const detectedRecipientBrands = new Set();
@@ -116,12 +113,13 @@ function onMessageSendHandler(event) {
                 if (domain) {
                     recipientDomains.add(domain);
                     const brand = getBrandFromDomain(domain);
-                    console.log(`[SmartAlert] 🏢 brand : `, brand);
+					console.log(`[SmartAlert] 🏢 brand : `, brand);
                     
                     // Alıcının marka adı tanımlı listede varsa kaydet
                     if (clientBrands.includes(brand)) {
                         detectedRecipientBrands.add(brand);
-                        console.log(`[SmartAlert] 🏢 detectedClientBrands : `, brand);
+						console.log(`[SmartAlert] 🏢 detectedRecipientBrands : `, brand);
+                    
                     }
                 }
             }
@@ -129,7 +127,7 @@ function onMessageSendHandler(event) {
             console.log(`[SmartAlert] 🔍 Tespit Edilen Tüm Alıcı Domainleri:`, Array.from(recipientDomains));
             console.log(`[SmartAlert] 🏢 Tespit Edilen Müşteri Markaları (Alıcılarda):`, Array.from(detectedRecipientBrands));
 
-            // --- ADIM 4: GÖNDEREN E-POSTA ÖZEL EŞLEŞME KONTROLÜ ---
+            // --- ADIM 2: GÖNDEREN E-POSTA ÖZEL EŞLEŞME KONTROLÜ ---
             const senderBrand = SENDER_BRAND_MAP[userEmail];
 
             if (senderBrand) {
@@ -150,7 +148,7 @@ function onMessageSendHandler(event) {
                 }
             }
 
-            // --- ADIM 5: ÇAPRAZ FİRMA KONTROLÜ (ÇOKLU FİRMA ENGELİ) ---
+            // --- ADIM 3: ÇAPRAZ FİRMA KONTROLÜ (ÇOKLU FİRMA ENGELİ) ---
             if (detectedRecipientBrands.size > 1) {
                 const clientList = Array.from(detectedRecipientBrands).map(b => b.toUpperCase()).join(", ");
                 console.log(`[SmartAlert] 🛑 ENGELLEME (Çoklu Firma Çakışması): Mailde ${detectedRecipientBrands.size} farklı firma tespit edildi -> [${clientList}]`);
@@ -162,12 +160,12 @@ function onMessageSendHandler(event) {
                 return;
             }
 
-            // --- HER ŞEY UYGUNSA GÖNDERİME İZİN VER ---
+            // --- HER ŞEY UYGUNSE GÖNDERİME İZİN VER ---
             console.log("[SmartAlert] ✅ TÜM KONTROLLER BAŞARILI. Gönderime izin veriliyor.");
             safeComplete({ allowEvent: true }, "Tüm kurallar doğrulandı");
 
         }).catch((err) => {
-            console.error("[SmartAlert] ❌ Alıcı okuma aşamasında hata:", err);
+            console.error("[SmartAlert] ❌ Alıcı/Gönderen okuma aşamasında hata:", err);
             safeComplete({ allowEvent: true }, "Okuma hatası");
         });
 
@@ -181,7 +179,30 @@ function onMessageSendHandler(event) {
 // 🛠️ YARDIMCI FONKSİYONLAR (HELPERS)
 // ============================================================================
 
-function getSenderEmail() {
+/**
+ * Paylaşılan kutu (Shared Mailbox) ve "Kimden" alanı değişikliklerini 
+ * doğru şekilde yakalayan asenkron gönderen adresi okuyucu.
+ */
+function getSenderEmailAsync(item) {
+    return new Promise((resolve) => {
+        if (item && item.from && typeof item.from.getAsync === "function") {
+            item.from.getAsync((result) => {
+                if (result && result.status === Office.AsyncResultStatus.Succeeded && result.value) {
+                    const addr = result.value.emailAddress || result.value.address || "";
+                    if (addr) {
+                        resolve(addr.toLowerCase().trim());
+                        return;
+                    }
+                }
+                resolve(getFallbackUserEmail());
+            });
+        } else {
+            resolve(getFallbackUserEmail());
+        }
+    });
+}
+
+function getFallbackUserEmail() {
     const mailbox = Office.context.mailbox;
     if (mailbox && mailbox.userProfile && mailbox.userProfile.emailAddress) {
         return mailbox.userProfile.emailAddress.toLowerCase().trim();
@@ -198,11 +219,6 @@ function getDomain(email) {
     return atIndex !== -1 ? email.substring(atIndex + 1).toLowerCase().trim() : "";
 }
 
-/**
- * Domain adının uzantısını temizleyerek ilk marka parçasını döndürür.
- * Örn: "onduline.com" -> "onduline"
- * Örn: "onduline.com.tr" -> "onduline"
- */
 function getBrandFromDomain(domain) {
     if (!domain || typeof domain !== "string") return "";
     return domain.split(".")[0].toLowerCase().trim();
