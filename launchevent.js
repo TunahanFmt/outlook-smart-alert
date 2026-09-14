@@ -5,8 +5,9 @@
  * OUTLOOK SMART ALERT - DOKÜMAN VE FİRMA KONTROL EKLENTİSİ
  * ============================================================================
  * Kurallar:
- * 1. Şahsi veya Shared hesaplardan atılan mailde (To, CC, BCC) aynı anda 2 FARKLI müşteri firması bulunamaz.
- * 2. Domain uzantıları (.com, .com.tr vb.) bağımsız marka köküne göre kontrol yapılır.
+ * 1. Özel tanımlı gönderen mailleri (abdiibrahimfilo@..., ccifilo@... vb.) sadece kendi firmasına mail gönderebilir.
+ * 2. Şahsi veya Genel hesaplardan atılan mailde (To, CC, BCC) aynı anda 2 FARKLI müşteri firması bulunamaz.
+ * 3. Domain uzantıları (.com, .com.tr vb.) bağımsız marka köküne göre kontrol yapılır.
  * ============================================================================
  */
 
@@ -21,7 +22,18 @@ Office.onReady();
 // 1. Kurum İçi Domain
 const INTERNAL_DOMAIN = "fmtturkey.com";
 
-// 2. Tanımlı Müşteri / Partner Firma Listesi
+// 2. Sabit Gönderen E-Posta -> Müşteri Markası Eşleşme Haritası
+// Yeni e-posta adreslerinizi ve bağlı oldukları markayı bu objeye ekleyebilirsiniz.
+const SENDER_BRAND_MAP = {
+    "abdiibrahimfilo@fmtturkey.com": "abdiibrahim",
+    "ccifilo@fmtturkey.com": "cci",
+    "akcansafilo@fmtturkey.com": "akcansa",
+    "ondulinefilo@fmtturkey.com": "onduline",
+    "allianzfilo@fmtturkey.com": "allianz",
+    "rochefilo@fmtturkey.com": "roche"
+};
+
+// 3. Tanımlı Müşteri / Partner Firma Domain Listesi
 // Uzantı yazsanız bile (.com / .com.tr) sistem otomatik olarak marka kökünü ("akcansa", "onduline") alır.
 const CLIENT_DOMAINS = [
     "akcansa.com.tr",
@@ -94,9 +106,8 @@ function onMessageSendHandler(event) {
             // --- ADIM 3: ALICI DOMAINLERINI VE MARKA KÖKLERİNİ ANALİZ ET ---
             // Tanımlı müşteri domainlerinin uzantısız marka isimlerini çıkar ("onduline.com.tr" -> "onduline")
             const clientBrands = CLIENT_DOMAINS.map(d => getBrandFromDomain(d));
-
             const recipientDomains = new Set();
-            const detectedClientBrands = new Set();
+            const detectedRecipientBrands = new Set();
 
             for (let i = 0; i < allRecipients.length; i++) {
                 const email = allRecipients[i];
@@ -104,25 +115,45 @@ function onMessageSendHandler(event) {
 
                 if (domain) {
                     recipientDomains.add(domain);
-
                     const brand = getBrandFromDomain(domain);
                     console.log(`[SmartAlert] 🏢 brand : `, brand);
                     
                     // Alıcının marka adı tanımlı listede varsa kaydet
                     if (clientBrands.includes(brand)) {
-                        detectedClientBrands.add(brand);
+                        detectedRecipientBrands.add(brand);
                         console.log(`[SmartAlert] 🏢 detectedClientBrands : `, brand);
                     }
                 }
             }
 
             console.log(`[SmartAlert] 🔍 Tespit Edilen Tüm Alıcı Domainleri:`, Array.from(recipientDomains));
-            console.log(`[SmartAlert] 🏢 Tespit Edilen Müşteri Markaları:`, Array.from(detectedClientBrands));
+            console.log(`[SmartAlert] 🏢 Tespit Edilen Müşteri Markaları (Alıcılarda):`, Array.from(detectedRecipientBrands));
 
-            // --- KONTROL 1: ÇAPRAZ FİRMA KONTROLÜ (ÇOKLU FİRMA ENGELİ) ---
-            if (detectedClientBrands.size > 1) {
-                const clientList = Array.from(detectedClientBrands).map(b => b.toUpperCase()).join(", ");
-                console.log(`[SmartAlert] 🛑 ENGELLEME (Çoklu Firma Çakışması): Mailde ${detectedClientBrands.size} farklı firma tespit edildi -> [${clientList}]`);
+            // --- ADIM 4: GÖNDEREN E-POSTA ÖZEL EŞLEŞME KONTROLÜ ---
+            const senderBrand = SENDER_BRAND_MAP[userEmail];
+
+            if (senderBrand) {
+                console.log(`[SmartAlert] 🎯 Gönderen adresi sabit listede tanımlı: [${userEmail}] -> Marka: [${senderBrand}]`);
+                
+                // Gönderenin tanımlı markası haricinde farklı bir müşteri markası alıcılarda var mı?
+                const foreignBrands = Array.from(detectedRecipientBrands).filter(b => b !== senderBrand);
+
+                if (foreignBrands.length > 0) {
+                    const targetCompanies = foreignBrands.map(b => b.toUpperCase()).join(", ");
+                    console.log(`[SmartAlert] 🛑 ENGELLEME: [${userEmail}] adresinden [${targetCompanies}] firmasına mail gönderilemez.`);
+
+                    safeComplete({
+                        allowEvent: false,
+                        errorMessage: `GÜVENLİK ENGELİ: ${userEmail} adresinden ${targetCompanies} firmasına mail atamazsınız!`
+                    }, "Gönderen-Alıcı Firma Uyuşmazlık Engeli");
+                    return;
+                }
+            }
+
+            // --- ADIM 5: ÇAPRAZ FİRMA KONTROLÜ (ÇOKLU FİRMA ENGELİ) ---
+            if (detectedRecipientBrands.size > 1) {
+                const clientList = Array.from(detectedRecipientBrands).map(b => b.toUpperCase()).join(", ");
+                console.log(`[SmartAlert] 🛑 ENGELLEME (Çoklu Firma Çakışması): Mailde ${detectedRecipientBrands.size} farklı firma tespit edildi -> [${clientList}]`);
 
                 safeComplete({
                     allowEvent: false,
@@ -131,7 +162,7 @@ function onMessageSendHandler(event) {
                 return;
             }
 
-            // --- HER ŞEY UYGUNSE GÖNDERİME İZİN VER ---
+            // --- HER ŞEY UYGUNSA GÖNDERİME İZİN VER ---
             console.log("[SmartAlert] ✅ TÜM KONTROLLER BAŞARILI. Gönderime izin veriliyor.");
             safeComplete({ allowEvent: true }, "Tüm kurallar doğrulandı");
 
