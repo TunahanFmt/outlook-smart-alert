@@ -26,10 +26,12 @@ const INTERNAL_DOMAIN = "fmtturkey.com";
 const SENDER_BRAND_MAP = {
     "abdiibrahimfilo@fmtturkey.com": "abdiibrahim",
     "ccifilo@fmtturkey.com": "cci",
+	"cciexpat@fmtturkey.com": "cci",
     "akcansafilo@fmtturkey.com": "akcansa",
     "ondulinefilo@fmtturkey.com": "onduline",
     "allianzfilo@fmtturkey.com": "allianz",
     "rochefilo@fmtturkey.com": "roche"
+	"rocheexpat@fmtturkey.com": "roche"
 };
 
 // 3. Tanımlı Müşteri / Partner Firma Domain Listesi
